@@ -217,3 +217,115 @@ h3:hover .header-anchor,
 h1, h2, h3 {
   scroll-margin-top: 1rem;
 }
+
+/* Post-download advert page */
+.download-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 4em); /* body has 2em top+bottom margin */
+}
+
+.download-page h1 {
+  margin-top: 0.5em;
+}
+
+/* Full-bleed band that clearly divides the page from the advert section */
+.whats-new {
+  margin: 4em calc(50% - 50vw) 0;
+  width: 100vw;
+  padding: 3.5em 1.5em 5em;
+  background: #f4f4f8;
+  border-top: 1px solid #e2e2ea;
+  border-bottom: 1px solid #e2e2ea;
+}
+
+.whats-new-eyebrow {
+  display: block;
+  max-width: 1000px;
+  margin: 0 auto 1.2em;
+  font-size: 1.6em;
+  font-weight: bold;
+  line-height: 1.2;
+  color: var(--primary-color);
+}
+
+#whatsNewList {
+  max-width: 1000px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.5em;
+}
+
+.whats-new-card {
+  display: block;
+  text-decoration: none;
+  color: #111;
+  /* no background by default; the feed's colours (if any) set one inline */
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 1.5em 1.6em;
+  overflow: hidden;
+  transition: transform .12s ease-in-out, box-shadow .12s ease-in-out;
+}
+
+.whats-new-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+}
+
+.whats-new-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin-bottom: 0.9em;
+}
+
+.whats-new-title {
+  display: block;
+  font-weight: bold;
+  font-size: 1.8em;
+  line-height: 1.2;
+}
+
+.whats-new-subtitle {
+  display: block;
+  margin-top: 0.5em;
+  max-width: 60ch; /* clamp line length for readability */
+  font-size: 1.15em;
+  line-height: 1.45;
+}
+
+.whats-new-cta {
+  display: inline-block;
+  margin-top: 1.1em;
+  font-size: 1.05em;
+  font-weight: bold;
+  text-decoration: underline;
+}
+
+.download-back {
+  margin-top: auto; /* push to the bottom of the page like a footer */
+  padding-top: 1.5em;
+  border-top: 1px solid lightgrey;
+  text-align: center;
+  font-size: 0.95em;
+}
+
+.download-back a {
+  display: inline-flex;
+  align-items: center; /* vertically center arrow with text */
+  gap: 0.4em;
+  color: #888;
+  text-decoration: none;
+}
+
+.download-back .back-arrow {
+  flex: none;
+}
+
+.download-back a:hover {
+  color: #555;
+}

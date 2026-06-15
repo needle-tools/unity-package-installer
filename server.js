@@ -178,10 +178,173 @@ function checkPackageExistance(url) {
 // http://package-installer.glitch.me/v1/install/needle/com.needle.compilation-visualizer/1.0.0?registry=https://packages.needle.tools&scope=com.needle
 // http://package-installer.glitch.me/v1/install/OpenUPM/elzach.leveleditor/0.0.7?registry=https://package.openupm.com&scope=elzach.leveleditor&scope=elzach.extensions
 
+/**
+ * Render the small "post download" page that auto-starts the actual download
+ * (same installer URL with ?dl=1) and shows a Needle "what's new" advert
+ * pulled client-side from the marketer feed.
+ * @param {import("express").Request} request
+ */
+function renderDownloadPage(request) {
+  // same URL, but pointing at the real file (?dl=1)
+  const original = request.originalUrl;
+  const downloadUrl = original + (original.includes("?") ? "&" : "?") + "dl=1";
+
+  // friendly package name for display (strip @version if present)
+  const nameVersion = splitNameAndVersion(request.params.nameAtVersion);
+  const packageName = nameVersion ? nameVersion.name : request.params.nameAtVersion;
+
+  // basic HTML escaping for the few server-injected values
+  const esc = (str) => String(str).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+
+  // the feed is public + CORS-open, so we fetch it from the browser
+  const feedUrl = "https://marketer.needle.tools/api/whats-new?surface=package-installer&license=none&limit=20";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>🌵 Downloading ${esc(packageName)} — needle</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="download-page">
+  <a href="https://needle.tools">
+    <img src="/needle-logo-black.svg" alt="Needle Logo" class="logo">
+  </a>
+
+  <h1>Your download is starting…</h1>
+  <p>
+    Installer for <strong>${esc(packageName)}</strong> should download automatically.<br>
+    If it doesn't, <a id="manualDownload" href="${esc(downloadUrl)}">click here to download it</a>.
+  </p>
+
+  <div id="whatsNew" class="whats-new" hidden>
+    <span class="whats-new-eyebrow">What's new at Needle</span>
+    <div id="whatsNewList"></div>
+  </div>
+
+  <!-- triggers the actual file download without navigating away -->
+  <iframe src="${esc(downloadUrl)}" style="display:none" title="download"></iframe>
+
+  <script>
+    // Fetch the "what's new" hints and render them, highest priority first.
+    // Theme falls back to the site palette when the feed provides no colours.
+    // Pick dark/light foreground for a hex background by its luminance.
+    function readableText(hex) {
+      var m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || '');
+      if (!m) return null;
+      var h = m[1];
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var r = parseInt(h.slice(0, 2), 16) / 255;
+      var g = parseInt(h.slice(2, 4), 16) / 255;
+      var b = parseInt(h.slice(4, 6), 16) / 255;
+      var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      return lum >= 0.6 ? '#111' : '#fff';
+    }
+
+    function renderCard(item) {
+      var banner = item.banner || {};
+      var short = item.short || {};
+
+      var link = document.createElement('a');
+      link.className = 'whats-new-card';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.href = item.url || '#';
+
+      // Theme from the authored brand colours; otherwise the CSS default
+      // (.whats-new-card) themes it from the site palette.
+      var colors = (item.colors || []).filter(Boolean);
+      if (colors.length) {
+        link.style.background = colors.length >= 2
+          ? 'linear-gradient(135deg, ' + colors[0] + ', ' + colors[1] + ')'
+          : colors[0];
+        var fg = readableText(colors[0]);
+        if (fg) link.style.color = fg;
+      }
+
+      var media = (item.media || []).filter(function (m) { return m.type === 'image' && m.url; });
+      var wide = media.find(function (m) { return m.format === 'wide'; }) || media[0];
+      if (wide) {
+        var img = document.createElement('img');
+        img.src = wide.url;
+        img.alt = '';
+        link.appendChild(img);
+      }
+
+      var title = document.createElement('span');
+      title.className = 'whats-new-title';
+      title.textContent = banner.title || short.title || '';
+      link.appendChild(title);
+
+      var subtitle = document.createElement('span');
+      subtitle.className = 'whats-new-subtitle';
+      subtitle.textContent = banner.subtitle || short.description || '';
+      link.appendChild(subtitle);
+
+      var cta = document.createElement('span');
+      cta.className = 'whats-new-cta';
+      cta.textContent = banner.cta || 'Learn more';
+      link.appendChild(cta);
+
+      return link;
+    }
+
+    // Pick one item at random, weighted by priority (higher priority = more
+    // likely). priority+1 keeps zero-priority items in the running.
+    function pickWeighted(items) {
+      var total = 0;
+      for (var i = 0; i < items.length; i++) total += (items[i].priority || 0) + 1;
+      var r = Math.random() * total;
+      for (var j = 0; j < items.length; j++) {
+        r -= (items[j].priority || 0) + 1;
+        if (r < 0) return items[j];
+      }
+      return items[items.length - 1];
+    }
+
+    fetch(${JSON.stringify(feedUrl)})
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var items = (data && data.items) || [];
+        if (!items.length) return;
+
+        var hero = pickWeighted(items);
+        document.getElementById('whatsNewList').appendChild(renderCard(hero));
+        document.getElementById('whatsNew').hidden = false;
+      })
+      .catch(function () { /* advert is best-effort, ignore failures */ });
+  </script>
+
+  <p class="download-back">
+    <a href="/">
+      <svg class="back-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+      Create another package installer
+    </a>
+  </p>
+</body>
+</html>`;
+}
+
 // https://stackoverflow.com/questions/41941724/nodejs-sendfile-with-file-name-in-download
 // send the .unitypackage back
 // https://techeplanet.com/express-path-parameter/
 app.get("/v1/installer/:registry/:nameAtVersion", /** @returns {Promise<any>} */ async (request, response, next) => {
+
+  // When a human navigates to an installer link we first show a small
+  // "post download" page that kicks off the actual download (same URL with
+  // ?dl=1) and shows a Needle "what's new" hint. The ?dl=1 request below
+  // does the real work and streams the .unitypackage.
+  if (!request.query.dl) {
+    return response.send(renderDownloadPage(request));
+  }
 
   console.log(request.query.scope + " - " + request.params.nameAtVersion);
   console.log(request.query.registry);

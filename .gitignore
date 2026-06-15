@@ -1,3 +1,5 @@
 ﻿node_modules
 .tmp
 tmp
+.data/stats.json
+.claude/settings.local.json

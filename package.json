@@ -3,6 +3,9 @@
   "version": "0.2.0",
   "description": "Creates .unitypackage installers that set up scoped registries and install packages.",
   "main": "server.js",
+  "engines": {
+    "node": "22"
+  },
   "scripts": {
     "start": "npm run dev",
     "dev": "node server.js"

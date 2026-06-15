@@ -13,9 +13,7 @@
 
   <link id="favicon" rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="/style.css">
-  <script defer file-types="unitypackage" data-domain="package-installer.needle.tools"
-    src="https://analytics.needle.tools/js/script.file-downloads.outbound-links.js"></script>
-  <script>window.plausible = window.plausible || function () { (window.plausible.q = window.plausible.q || []).push(arguments) }</script>
+  <script src="https://analytics-2.needle.tools/api/script.js" data-site-id="4d65f5b89a8d" defer></script>
 </head>
 
 <body>
@@ -85,6 +83,11 @@
 
 
   <script type="module">
+    // Best-effort custom event tracking (Rybbit). No-op if the script blocked.
+    function track(name, props) {
+      try { if (window.rybbit && window.rybbit.event) window.rybbit.event(name, props || {}); } catch (e) {}
+    }
+
     function parsePackageFromUrl(urlString) {
       try {
         // Handle Needle Tools URLs: https://packages.needle.tools/-/web/detail/PACKAGE_NAME
@@ -159,6 +162,7 @@
         // If it's a URL that we can parse, extract the package name and set registry
         this.value = parsedData.packageName;
         document.getElementById('registry').value = parsedData.registry;
+        track('package_url_pasted', { package: parsedData.packageName, registry: parsedData.registry });
       }
 
       updateUrl();
@@ -175,13 +179,22 @@
         ta.select();
         document.execCommand('copy');
       }
+      track('copy_installer_url', {
+        package: document.getElementById('packageName').value,
+        registry: document.getElementById('registry').value
+      });
     });
 
     // Prevent click when "disabled"
     document.getElementById('downloadNow').addEventListener('click', function (e) {
       if (this.classList.contains('disabled')) {
         e.preventDefault();
+        return;
       }
+      track('download_installer_click', {
+        package: document.getElementById('packageName').value,
+        registry: document.getElementById('registry').value
+      });
     });
 
     // Add header anchor links that copy section URL on click

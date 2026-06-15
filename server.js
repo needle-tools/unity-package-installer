@@ -210,6 +210,7 @@ function renderDownloadPage(request) {
   <title>🌵 Downloading ${esc(packageName)} — needle</title>
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="/style.css">
+  <script src="https://analytics-2.needle.tools/api/script.js" data-site-id="4d65f5b89a8d" defer></script>
 </head>
 <body class="download-page">
   <a href="https://needle.tools">
@@ -234,6 +235,19 @@ function renderDownloadPage(request) {
     // Fetch the "what's new" hints and render them, highest priority first.
     // Theme falls back to the site palette when the feed provides no colours.
     // Pick dark/light foreground for a hex background by its luminance.
+    var PACKAGE = ${JSON.stringify(packageName)};
+
+    // Best-effort custom event tracking (Rybbit). No-op if the script blocked.
+    function track(name, props) {
+      try { if (window.rybbit && window.rybbit.event) window.rybbit.event(name, props || {}); } catch (e) {}
+    }
+
+    // Manual fallback link click means the auto-download likely didn't fire.
+    var manual = document.getElementById('manualDownload');
+    if (manual) manual.addEventListener('click', function () {
+      track('download_manual', { package: PACKAGE });
+    });
+
     function readableText(hex) {
       var m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || '');
       if (!m) return null;
@@ -291,6 +305,10 @@ function renderDownloadPage(request) {
       cta.textContent = banner.cta || 'Learn more';
       link.appendChild(cta);
 
+      link.addEventListener('click', function () {
+        track('whatsnew_click', { id: item.id, title: title.textContent, url: item.url || '' });
+      });
+
       return link;
     }
 
@@ -316,6 +334,7 @@ function renderDownloadPage(request) {
         var hero = pickWeighted(items);
         document.getElementById('whatsNewList').appendChild(renderCard(hero));
         document.getElementById('whatsNew').hidden = false;
+        track('whatsnew_impression', { id: hero.id, title: (hero.banner && hero.banner.title) || (hero.short && hero.short.title) || '' });
       })
       .catch(function () { /* advert is best-effort, ignore failures */ });
   </script>
@@ -538,23 +557,33 @@ function sendAnalyticsEvent(args) {
 
   const ipAddress = getIpAddress(args.request);
 
-  const url = "https://analytics.needle.tools/api/event";
+  // split the request URL into pathname + querystring for Rybbit
+  const originalUrl = args.request.originalUrl || "/";
+  const qIndex = originalUrl.indexOf("?");
+  const pathname = qIndex === -1 ? originalUrl : originalUrl.slice(0, qIndex);
+  const querystring = qIndex === -1 ? "" : originalUrl.slice(qIndex);
+
+  const headers = { 'Content-Type': 'application/json' };
+  // Authorization is optional but recommended for server-side tracking.
+  if (process.env.RYBBIT_API_KEY) headers["Authorization"] = "Bearer " + process.env.RYBBIT_API_KEY;
+
+  const url = "https://analytics-2.needle.tools/api/track";
   console.log("Sending analytics event to " + url + " for " + args.request.originalUrl);
   return fetch(url, {
     method: "POST",
-    headers: {
-      'Content-Type': 'application/json',
-      "X-Forwarded-For": ipAddress,
-      "User-Agent": args.request.headers['user-agent'] || "unknown",
-    },
+    headers: headers,
     body: JSON.stringify({
-      domain: "package-installer.needle.tools",
-      name: args.name,
-      url: args.request.originalUrl,
+      site_id: "4d65f5b89a8d",
+      type: "custom_event",
+      event_name: args.name,
+      hostname: "package-installer.needle.tools",
+      pathname: pathname,
+      querystring: querystring,
       referrer: args.request.headers.referer || "",
-      props: {
-        ...args.props,
-      }
+      user_agent: args.request.headers['user-agent'] || "unknown",
+      ip_address: ipAddress,
+      // properties must be a JSON-encoded string for the Rybbit API
+      properties: JSON.stringify({ ...args.props }),
     })
   });
 }

@@ -178,13 +178,101 @@ function checkPackageExistance(url) {
 // http://package-installer.glitch.me/v1/install/needle/com.needle.compilation-visualizer/1.0.0?registry=https://packages.needle.tools&scope=com.needle
 // http://package-installer.glitch.me/v1/install/OpenUPM/elzach.leveleditor/0.0.7?registry=https://package.openupm.com&scope=elzach.leveleditor&scope=elzach.extensions
 
+// Server-side cache for the "what's new" feed so we fetch it at most once per
+// TTL and inline the chosen card into the page. This makes the advert reliable
+// on the very first page load (no client fetch that can fail/be blocked).
+const WHATS_NEW_URL = "https://marketer.needle.tools/api/whats-new?surface=package-installer&license=none&limit=20";
+const WHATS_NEW_TTL = 5 * 60 * 1000; // 5 minutes
+let whatsNewCache = { items: null, at: 0 };
+
+async function getWhatsNewItems() {
+  const now = Date.now();
+  if (whatsNewCache.items && (now - whatsNewCache.at) < WHATS_NEW_TTL)
+    return whatsNewCache.items;
+
+  try {
+    const res = await fetch(WHATS_NEW_URL);
+    const data = await res.json();
+    const items = (data && data.items) || [];
+    whatsNewCache = { items: items, at: now };
+    return items;
+  } catch (e) {
+    console.log("Failed to fetch what's new feed: " + e.toString());
+    // serve stale cache if we have it, otherwise show no advert
+    return whatsNewCache.items || [];
+  }
+}
+
+// Pick one item at random, weighted by priority (higher priority = more likely).
+// priority+1 keeps zero-priority items in the running.
+function pickWeightedItem(items) {
+  let total = 0;
+  for (const item of items) total += (item.priority || 0) + 1;
+  let r = Math.random() * total;
+  for (const item of items) {
+    r -= (item.priority || 0) + 1;
+    if (r < 0) return item;
+  }
+  return items[items.length - 1];
+}
+
+// Pick dark/light foreground for a hex background by its luminance.
+function readableTextColor(hex) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum >= 0.6 ? "#111" : "#fff";
+}
+
+// Build the inlined "what's new" card HTML for a feed item.
+// Returns { html, id, title } so the page can also emit tracking for it.
+function renderWhatsNewCard(item, esc) {
+  const banner = item.banner || {};
+  const short = item.short || {};
+  const title = banner.title || short.title || "";
+  const subtitle = banner.subtitle || short.description || "";
+  const cta = banner.cta || "Learn more";
+  const url = item.url || "#";
+
+  // Theme from the authored brand colours; otherwise the CSS default
+  // (.whats-new-card) themes it from the site palette.
+  let style = "";
+  const colors = (item.colors || []).filter(Boolean);
+  if (colors.length) {
+    const bg = colors.length >= 2
+      ? `linear-gradient(135deg, ${colors[0]}, ${colors[1]})`
+      : colors[0];
+    let css = `background:${bg};`;
+    const fg = readableTextColor(colors[0]);
+    if (fg) css += `color:${fg};`;
+    style = ` style="${esc(css)}"`;
+  }
+
+  const media = (item.media || []).filter((m) => m && m.type === "image" && m.url);
+  const wide = media.find((m) => m.format === "wide") || media[0];
+  const imgHtml = wide ? `<img src="${esc(wide.url)}" alt="">\n        ` : "";
+
+  const html = `<a id="whatsNewCard" class="whats-new-card" href="${esc(url)}" target="_blank" rel="noopener"${style}>
+        ${imgHtml}<span class="whats-new-title">${esc(title)}</span>
+        <span class="whats-new-subtitle">${esc(subtitle)}</span>
+        <span class="whats-new-cta">${esc(cta)}</span>
+      </a>`;
+
+  return { html, id: item.id || "", title };
+}
+
 /**
  * Render the small "post download" page that auto-starts the actual download
- * (same installer URL with ?dl=1) and shows a Needle "what's new" advert
- * pulled client-side from the marketer feed.
+ * (same installer URL with ?dl=1) and shows a Needle "what's new" advert that
+ * is fetched + cached server-side and inlined into the page.
  * @param {import("express").Request} request
  */
-function renderDownloadPage(request) {
+async function renderDownloadPage(request) {
   // same URL, but pointing at the real file (?dl=1)
   const original = request.originalUrl;
   const downloadUrl = original + (original.includes("?") ? "&" : "?") + "dl=1";
@@ -198,8 +286,25 @@ function renderDownloadPage(request) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   })[c]);
 
-  // the feed is public + CORS-open, so we fetch it from the browser
-  const feedUrl = "https://marketer.needle.tools/api/whats-new?surface=package-installer&license=none&limit=20";
+  // fetch (cached) feed, pick a weighted-random hero, and inline its card
+  const items = await getWhatsNewItems();
+  const hero = items.length ? pickWeightedItem(items) : null;
+  const card = hero ? renderWhatsNewCard(hero, esc) : null;
+
+  const whatsNewHtml = card ? `
+  <div id="whatsNew" class="whats-new">
+    <span class="whats-new-eyebrow">What's new at Needle</span>
+    <div id="whatsNewList">${card.html}</div>
+  </div>` : "";
+
+  const whatsNewTracking = card ? `
+    var heroEl = document.getElementById('whatsNewCard');
+    if (heroEl) {
+      track('whatsnew_impression', ${JSON.stringify({ id: card.id, title: card.title })});
+      heroEl.addEventListener('click', function () {
+        track('whatsnew_click', ${JSON.stringify({ id: card.id, title: card.title, url: hero.url || "" })});
+      });
+    }` : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -222,19 +327,11 @@ function renderDownloadPage(request) {
     Installer for <strong>${esc(packageName)}</strong> should download automatically.<br>
     If it doesn't, <a id="manualDownload" href="${esc(downloadUrl)}">click here to download it</a>.
   </p>
-
-  <div id="whatsNew" class="whats-new" hidden>
-    <span class="whats-new-eyebrow">What's new at Needle</span>
-    <div id="whatsNewList"></div>
-  </div>
-
+${whatsNewHtml}
   <!-- triggers the actual file download without navigating away -->
   <iframe src="${esc(downloadUrl)}" style="display:none" title="download"></iframe>
 
   <script>
-    // Fetch the "what's new" hints and render them, highest priority first.
-    // Theme falls back to the site palette when the feed provides no colours.
-    // Pick dark/light foreground for a hex background by its luminance.
     var PACKAGE = ${JSON.stringify(packageName)};
 
     // Best-effort custom event tracking (Rybbit). No-op if the script blocked.
@@ -247,96 +344,7 @@ function renderDownloadPage(request) {
     if (manual) manual.addEventListener('click', function () {
       track('download_manual', { package: PACKAGE });
     });
-
-    function readableText(hex) {
-      var m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex || '');
-      if (!m) return null;
-      var h = m[1];
-      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-      var r = parseInt(h.slice(0, 2), 16) / 255;
-      var g = parseInt(h.slice(2, 4), 16) / 255;
-      var b = parseInt(h.slice(4, 6), 16) / 255;
-      var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      return lum >= 0.6 ? '#111' : '#fff';
-    }
-
-    function renderCard(item) {
-      var banner = item.banner || {};
-      var short = item.short || {};
-
-      var link = document.createElement('a');
-      link.className = 'whats-new-card';
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.href = item.url || '#';
-
-      // Theme from the authored brand colours; otherwise the CSS default
-      // (.whats-new-card) themes it from the site palette.
-      var colors = (item.colors || []).filter(Boolean);
-      if (colors.length) {
-        link.style.background = colors.length >= 2
-          ? 'linear-gradient(135deg, ' + colors[0] + ', ' + colors[1] + ')'
-          : colors[0];
-        var fg = readableText(colors[0]);
-        if (fg) link.style.color = fg;
-      }
-
-      var media = (item.media || []).filter(function (m) { return m.type === 'image' && m.url; });
-      var wide = media.find(function (m) { return m.format === 'wide'; }) || media[0];
-      if (wide) {
-        var img = document.createElement('img');
-        img.src = wide.url;
-        img.alt = '';
-        link.appendChild(img);
-      }
-
-      var title = document.createElement('span');
-      title.className = 'whats-new-title';
-      title.textContent = banner.title || short.title || '';
-      link.appendChild(title);
-
-      var subtitle = document.createElement('span');
-      subtitle.className = 'whats-new-subtitle';
-      subtitle.textContent = banner.subtitle || short.description || '';
-      link.appendChild(subtitle);
-
-      var cta = document.createElement('span');
-      cta.className = 'whats-new-cta';
-      cta.textContent = banner.cta || 'Learn more';
-      link.appendChild(cta);
-
-      link.addEventListener('click', function () {
-        track('whatsnew_click', { id: item.id, title: title.textContent, url: item.url || '' });
-      });
-
-      return link;
-    }
-
-    // Pick one item at random, weighted by priority (higher priority = more
-    // likely). priority+1 keeps zero-priority items in the running.
-    function pickWeighted(items) {
-      var total = 0;
-      for (var i = 0; i < items.length; i++) total += (items[i].priority || 0) + 1;
-      var r = Math.random() * total;
-      for (var j = 0; j < items.length; j++) {
-        r -= (items[j].priority || 0) + 1;
-        if (r < 0) return items[j];
-      }
-      return items[items.length - 1];
-    }
-
-    fetch(${JSON.stringify(feedUrl)})
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        var items = (data && data.items) || [];
-        if (!items.length) return;
-
-        var hero = pickWeighted(items);
-        document.getElementById('whatsNewList').appendChild(renderCard(hero));
-        document.getElementById('whatsNew').hidden = false;
-        track('whatsnew_impression', { id: hero.id, title: (hero.banner && hero.banner.title) || (hero.short && hero.short.title) || '' });
-      })
-      .catch(function () { /* advert is best-effort, ignore failures */ });
+${whatsNewTracking}
   </script>
 
   <p class="download-back">
@@ -362,7 +370,7 @@ app.get("/v1/installer/:registry/:nameAtVersion", /** @returns {Promise<any>} */
   // ?dl=1) and shows a Needle "what's new" hint. The ?dl=1 request below
   // does the real work and streams the .unitypackage.
   if (!request.query.dl) {
-    return response.send(renderDownloadPage(request));
+    return response.send(await renderDownloadPage(request));
   }
 
   console.log(request.query.scope + " - " + request.params.nameAtVersion);

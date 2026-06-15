@@ -229,6 +229,22 @@ function readableTextColor(hex) {
   return lum >= 0.6 ? "#111" : "#fff";
 }
 
+// Append UTM campaign params to an outbound advert link so the destination
+// can attribute traffic back to the installer's what's new card.
+function withUtm(rawUrl, item) {
+  if (!rawUrl || rawUrl === "#") return rawUrl || "#";
+  try {
+    const u = new URL(rawUrl);
+    u.searchParams.set("utm_source", "package-installer.needle.tools");
+    u.searchParams.set("utm_medium", "whats-new");
+    u.searchParams.set("utm_campaign", "post-download");
+    if (item && item.id) u.searchParams.set("utm_content", item.id);
+    return u.toString();
+  } catch (e) {
+    return rawUrl; // not an absolute URL we can parse; leave as-is
+  }
+}
+
 // Build the inlined "what's new" card HTML for a feed item.
 // Returns { html, id, title } so the page can also emit tracking for it.
 function renderWhatsNewCard(item, esc) {
@@ -237,7 +253,7 @@ function renderWhatsNewCard(item, esc) {
   const title = banner.title || short.title || "";
   const subtitle = banner.subtitle || short.description || "";
   const cta = banner.cta || "Learn more";
-  const url = item.url || "#";
+  const url = withUtm(item.url, item);
 
   // Theme from the authored brand colours; otherwise the CSS default
   // (.whats-new-card) themes it from the site palette.
@@ -318,7 +334,7 @@ async function renderDownloadPage(request) {
   <script src="https://analytics-2.needle.tools/api/script.js" data-site-id="4d65f5b89a8d" defer></script>
 </head>
 <body class="download-page">
-  <a href="https://needle.tools">
+  <a href="/">
     <img src="/needle-logo-black.svg" alt="Needle Logo" class="logo">
   </a>
 
